@@ -218,6 +218,7 @@
 
   .btn-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     margin-top: 1rem;
   }
@@ -271,31 +272,6 @@
   .alert.error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger-border); }
   .alert.success { background: var(--success-bg); color: var(--success); border-color: var(--success-border); }
   .alert.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
-
-  .preview-block {
-    display: none;
-    margin-top: 1rem;
-  }
-
-  .preview-label {
-    font-size: 12px;
-    color: var(--text3);
-    margin-bottom: 6px;
-  }
-
-  .preview-code {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 12px;
-    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-    font-size: 11.5px;
-    color: var(--text);
-    white-space: pre-wrap;
-    word-break: break-all;
-    overflow-x: auto;
-    line-height: 1.7;
-  }
 
   .rules {
     display: grid;
@@ -388,6 +364,10 @@
   </div>
 
   <div class="btn-row">
+    <button class="btn btn-ghost" onclick="checkNumbers()">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.2l-3.5-3.5a1 1 0 10-1.4 1.42l4.2 4.2a1 1 0 001.4 0l9-9a1 1 0 10-1.4-1.42L9 16.2z"/></svg>
+      Проверить
+    </button>
     <button class="btn btn-primary" onclick="generate()">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 16l-6-6h4V4h4v6h4l-6 6zm-7 2v2h14v-2H5z"/></svg>
       Сформировать и скачать CSV
@@ -398,12 +378,9 @@
     </button>
   </div>
 
-  <div class="alert" id="alert"></div>
+  <div class="alert" id="checkComment"></div>
 
-  <div class="preview-block" id="previewBlock">
-    <p class="preview-label">Предпросмотр (первые 5 строк данных):</p>
-    <div class="preview-code" id="previewCode"></div>
-  </div>
+  <div class="alert" id="alert"></div>
 
   <div class="card" style="margin-top:1.5rem;">
     <p class="card-title">Правила обработки</p>
@@ -549,7 +526,6 @@ function downloadCSV(csv, filename) {
 
 function generate() {
   document.getElementById('alert').style.display = 'none';
-  document.getElementById('previewBlock').style.display = 'none';
 
   const raw = numbersEl.value.trim();
   if (!raw) { showAlert('⚠ Введите хотя бы один номер телефона.', 'warn'); return; }
@@ -595,13 +571,51 @@ function generate() {
     msg += `\n⚠ Не добавлены в файл — проверьте номера (нужен формат 7XXXXXXXXXX): ${fmtList(invalid)}`;
   }
   showAlert(msg, invalid.length ? 'warn' : 'success');
+}
 
-  // Предпросмотр первого файла
-  const previewCsv = buildCSV(parts[0], deviceName, deviceType, address);
-  const lines = previewCsv.split('\r\n');
-  const preview = lines.slice(0, 6).join('\n') + (parts[0].length > 5 ? `\n... ещё ${parts[0].length - 5} строк в файле 1` : '');
-  document.getElementById('previewCode').textContent = preview;
-  document.getElementById('previewBlock').style.display = 'block';
+// Проверка номеров без формирования файлов.
+// Выводит комментарий: либо «всё корректно», либо перечень проблем (дубли, странные номера).
+function checkNumbers() {
+  const out = document.getElementById('checkComment');
+  document.getElementById('alert').style.display = 'none';
+
+  const raw = numbersEl.value.trim();
+  if (!raw) {
+    out.textContent = '⚠ Поле пустое — введите номера для проверки.';
+    out.className = 'alert warn';
+    out.style.whiteSpace = 'pre-line';
+    out.style.display = 'block';
+    return;
+  }
+
+  const { valid, invalid } = classify(raw);
+  const unique = [...new Set(valid)];
+  const n = unique.length;
+  const dups = valid.length - n;
+  const files = Math.ceil(n / CHUNK_SIZE);
+
+  const issues = [];
+  if (dups > 0) issues.push(`• Дубли: найдено ${dups} (будут удалены автоматически).`);
+  if (invalid.length > 0) issues.push(`• Странные номера: ${invalid.length} — не попадут в файл, проверьте формат 7XXXXXXXXXX: ${fmtList(invalid)}`);
+
+  let type, text;
+  if (n === 0) {
+    type = 'error';
+    text = '✗ Корректных номеров не найдено (нужен формат 7XXXXXXXXXX — ровно 11 цифр).';
+    if (issues.length) text += '\n' + issues.join('\n');
+  } else if (issues.length === 0) {
+    type = 'success';
+    text = `✓ Всё корректно, можно формировать файлы.\nУникальных номеров: ${n} → файлов: ${files}.`;
+  } else {
+    type = 'warn';
+    text = '⚠ Есть замечания:\n' + issues.join('\n') +
+           `\n\nК формированию готово: ${n} номеров → файлов: ${files}.`;
+  }
+
+  out.textContent = text;
+  out.className = 'alert ' + type;
+  out.style.whiteSpace = 'pre-line';
+  out.style.display = 'block';
 }
 
 function clearAll() {
@@ -609,7 +623,7 @@ function clearAll() {
   document.getElementById('deviceName').value = '';
   document.getElementById('deviceAddress').value = '';
   document.getElementById('alert').style.display = 'none';
-  document.getElementById('previewBlock').style.display = 'none';
+  document.getElementById('checkComment').style.display = 'none';
   updateCounter();
 }
 </script>
