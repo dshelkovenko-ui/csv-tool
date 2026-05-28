@@ -381,8 +381,8 @@
       <div class="hint">Любой формат: с 8, с +7, без кода страны, через запятую или пробел</div>
     </div>
     <div class="counter-row">
-      <span class="counter" id="counter">Номеров: 0 / 1000</span>
-      <span style="font-size:11px; color:var(--text3);">макс. 1000 на файл</span>
+      <span class="counter" id="counter">Номеров: 0</span>
+      <span style="font-size:11px; color:var(--text3);">по 1000 номеров в файле</span>
     </div>
     <div class="bar-bg"><div class="bar-fill" id="bar"></div></div>
   </div>
@@ -411,7 +411,7 @@
       <div class="rule-item"><span class="rule-icon">🔢</span><span>Нормализация в формат <b>7XXXXXXXXXX</b></span></div>
       <div class="rule-item"><span class="rule-icon">🗑</span><span>Автоудаление дублей в списке</span></div>
       <div class="rule-item"><span class="rule-icon">📋</span><span>Шаблон оператора: 5 колонок CSV</span></div>
-      <div class="rule-item"><span class="rule-icon">⚠️</span><span>Не более 1000 номеров на файл</span></div>
+      <div class="rule-item"><span class="rule-icon">✂️</span><span>Авторазбивка по 1000 номеров на файл</span></div>
       <div class="rule-item"><span class="rule-icon">🔤</span><span>Кодировка UTF-8 (открывается в Excel)</span></div>
       <div class="rule-item"><span class="rule-icon">📁</span><span>Имя файла включает оператора и кол-во</span></div>
     </div>
@@ -445,14 +445,21 @@ function parseNumbers(raw) {
 
 numbersEl.addEventListener('input', updateCounter);
 
+const CHUNK_SIZE = 1000;
+
 function updateCounter() {
   const nums = parseNumbers(numbersEl.value);
   const n = nums.length;
-  counterEl.textContent = `Номеров: ${n} / 1000`;
-  counterEl.className = 'counter' + (n > 1000 ? ' over' : '');
-  const pct = Math.min((n / 1000) * 100, 100);
+  const files = Math.ceil(n / CHUNK_SIZE);
+  counterEl.textContent = files > 1
+    ? `Номеров: ${n} → файлов: ${files}`
+    : `Номеров: ${n}`;
+  counterEl.className = 'counter';
+  // полоса показывает заполнение последнего (неполного) файла
+  const rem = n % CHUNK_SIZE;
+  const pct = n === 0 ? 0 : (rem === 0 ? 100 : (rem / CHUNK_SIZE) * 100);
   barEl.style.width = pct + '%';
-  barEl.className = 'bar-fill' + (n > 1000 ? ' over' : '');
+  barEl.className = 'bar-fill';
 }
 
 function showAlert(msg, type) {
@@ -479,6 +486,24 @@ function buildCSV(numbers, deviceName, deviceType, address) {
   return '\uFEFF' + [header, ...rows].join('\r\n');
 }
 
+function chunkArray(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+function downloadCSV(csv, filename) {
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 function generate() {
   document.getElementById('alert').style.display = 'none';
   document.getElementById('previewBlock').style.display = 'none';
@@ -491,33 +516,41 @@ function generate() {
     showAlert('⚠ Не найдено корректных номеров. Проверьте формат ввода — ожидаются 10–11-значные цифровые номера.', 'error');
     return;
   }
-  if (nums.length > 1000) {
-    showAlert(`⚠ Слишком много номеров: ${nums.length}. Максимум 1000 в одном файле. Разбейте список на части.`, 'error');
-    return;
-  }
 
   const operator = document.getElementById('operator').value;
   const deviceType = document.getElementById('deviceType').value;
   const deviceName = document.getElementById('deviceName').value.trim();
   const address = document.getElementById('deviceAddress').value.trim();
 
-  const csv = buildCSV(nums, deviceName, deviceType, address);
-  const filename = `${operator}_${nums.length}_номеров.csv`;
+  const parts = chunkArray(nums, CHUNK_SIZE);
+  const total = parts.length;
 
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  // Скачиваем каждый файл с небольшой задержкой,
+  // чтобы браузер не блокировал множественную загрузку
+  parts.forEach((part, i) => {
+    const csv = buildCSV(part, deviceName, deviceType, address);
+    const filename = total === 1
+      ? `${operator}_${part.length}_номеров.csv`
+      : `${operator}_часть_${i + 1}_из_${total}_${part.length}_номеров.csv`;
+    setTimeout(() => downloadCSV(csv, filename), i * 400);
+  });
 
-  showAlert(`✓ Файл «${filename}» скачан — ${nums.length} номеров для ${operator}.`, 'success');
+  // Сообщение с разбивкой
+  const full = Math.floor(nums.length / CHUNK_SIZE);
+  const rem = nums.length % CHUNK_SIZE;
+  let breakdown = '';
+  if (total > 1) {
+    const partsDesc = [];
+    if (full > 0) partsDesc.push(`${full} файл(ов) по ${CHUNK_SIZE}`);
+    if (rem > 0) partsDesc.push(`1 файл с ${rem}`);
+    breakdown = ` (${partsDesc.join(' + ')})`;
+  }
+  showAlert(`✓ Сформировано файлов: ${total}${breakdown} — всего ${nums.length} номеров для ${operator}.`, 'success');
 
-  const lines = csv.split('\r\n');
-  const preview = lines.slice(0, 7).join('\n') + (nums.length > 5 ? `\n... ещё ${nums.length - 5} строк` : '');
+  // Предпросмотр первого файла
+  const previewCsv = buildCSV(parts[0], deviceName, deviceType, address);
+  const lines = previewCsv.split('\r\n');
+  const preview = lines.slice(0, 6).join('\n') + (parts[0].length > 5 ? `\n... ещё ${parts[0].length - 5} строк в файле 1` : '');
   document.getElementById('previewCode').textContent = preview;
   document.getElementById('previewBlock').style.display = 'block';
 }
