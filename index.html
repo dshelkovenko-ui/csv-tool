@@ -426,34 +426,53 @@ const numbersEl = document.getElementById('numbers');
 const counterEl = document.getElementById('counter');
 const barEl = document.getElementById('bar');
 
-function parseNumbers(raw) {
-  const tokens = raw
+// Возвращает массив нормализованных номеров ДО удаления дублей (с повторами)
+function normalizeAll(raw) {
+  return raw
     .replace(/\r/g, '\n')
     .split(/[\n,;\s]+/)
     .map(s => s.replace(/[\s\-\(\)\+]/g, ''))
-    .filter(s => /^\d{7,15}$/.test(s));
+    .filter(s => /^\d{7,15}$/.test(s))
+    .map(s => {
+      if (s.length === 11 && s.startsWith('8')) return '7' + s.slice(1);
+      if (s.length === 10 && s.startsWith('9')) return '7' + s;
+      if (s.length === 11 && s.startsWith('7')) return s;
+      return s;
+    });
+}
 
-  const normalized = tokens.map(s => {
-    if (s.length === 11 && s.startsWith('8')) return '7' + s.slice(1);
-    if (s.length === 10 && s.startsWith('9')) return '7' + s;
-    if (s.length === 11 && s.startsWith('7')) return s;
-    return s;
-  });
-
-  return [...new Set(normalized)];
+// Уникальные номера (с удалением дублей, порядок сохраняется)
+function parseNumbers(raw) {
+  return [...new Set(normalizeAll(raw))];
 }
 
 numbersEl.addEventListener('input', updateCounter);
 
+// При вставке номеров автоматически убираем дубли из поля
+numbersEl.addEventListener('paste', () => {
+  setTimeout(() => {
+    const all = normalizeAll(numbersEl.value);
+    const unique = [...new Set(all)];
+    const dups = all.length - unique.length;
+    if (dups > 0) {
+      numbersEl.value = unique.join('\n');
+      showAlert(`🗑 Удалено дублей: ${dups}. Осталось уникальных номеров: ${unique.length}.`, 'success');
+    }
+    updateCounter();
+  }, 0);
+});
+
 const CHUNK_SIZE = 1000;
 
 function updateCounter() {
-  const nums = parseNumbers(numbersEl.value);
+  const all = normalizeAll(numbersEl.value);
+  const nums = [...new Set(all)];
   const n = nums.length;
+  const dups = all.length - n;
   const files = Math.ceil(n / CHUNK_SIZE);
-  counterEl.textContent = files > 1
-    ? `Номеров: ${n} → файлов: ${files}`
-    : `Номеров: ${n}`;
+  let txt = files > 1 ? `Номеров: ${n} → файлов: ${files}` : `Номеров: ${n}`;
+  if (dups > 0) txt += ` · дублей: ${dups}`;
+  counterEl.textContent = txt;
   counterEl.className = 'counter';
   // полоса показывает заполнение последнего (неполного) файла
   const rem = n % CHUNK_SIZE;
