@@ -426,38 +426,60 @@ const numbersEl = document.getElementById('numbers');
 const counterEl = document.getElementById('counter');
 const barEl = document.getElementById('bar');
 
-// Возвращает массив нормализованных номеров ДО удаления дублей (с повторами)
-function normalizeAll(raw) {
-  return raw
-    .replace(/\r/g, '\n')
-    .split(/[\n,;\s]+/)
-    .map(s => s.replace(/[\s\-\(\)\+]/g, ''))
-    .filter(s => /^\d{7,15}$/.test(s))
-    .map(s => {
-      if (s.length === 11 && s.startsWith('8')) return '7' + s.slice(1);
-      if (s.length === 10 && s.startsWith('9')) return '7' + s;
-      if (s.length === 11 && s.startsWith('7')) return s;
-      return s;
+// Разбирает ввод и делит токены на два списка:
+//   valid   — приведённые к виду 7XXXXXXXXXX (ровно 11 цифр, первая — 7), с возможными дублями
+//   invalid — исходные токены, которые НЕ удалось привести к 7XXXXXXXXXX (нужно проверить вручную)
+// Правила приведения:
+//   8XXXXXXXXXX (11 цифр) → 7XXXXXXXXXX
+//   +7/7XXXXXXXXXX (11 цифр) → 7XXXXXXXXXX
+//   9XXXXXXXXX (10 цифр) → 79XXXXXXXXX
+function classify(raw) {
+  const valid = [];
+  const invalid = [];
+  raw.replace(/\r/g, '\n').split(/[\n,;]+/).forEach(part => {
+    part.split(/\s+/).forEach(tok => {
+      const t = tok.trim();
+      if (!t) return;
+      const d = t.replace(/\D/g, '');   // только цифры
+      if (!d) return;                   // мусор без цифр пропускаем молча
+      let norm = null;
+      if (d.length === 11 && d.startsWith('8')) norm = '7' + d.slice(1);
+      else if (d.length === 11 && d.startsWith('7')) norm = d;
+      else if (d.length === 10 && d.startsWith('9')) norm = '7' + d;
+      if (norm && /^7\d{10}$/.test(norm)) valid.push(norm);
+      else invalid.push(t);
     });
+  });
+  return { valid, invalid };
 }
 
-// Уникальные номера (с удалением дублей, порядок сохраняется)
+// Уникальные валидные номера (с удалением дублей, порядок сохраняется)
 function parseNumbers(raw) {
-  return [...new Set(normalizeAll(raw))];
+  return [...new Set(classify(raw).valid)];
+}
+
+// Форматирует список номеров для сообщения (с ограничением длины)
+function fmtList(arr, max = 30) {
+  if (arr.length <= max) return arr.join(', ');
+  return arr.slice(0, max).join(', ') + ` … и ещё ${arr.length - max}`;
 }
 
 numbersEl.addEventListener('input', updateCounter);
 
-// При вставке номеров автоматически убираем дубли из поля
+// При вставке номеров автоматически убираем дубли из поля.
+// Сомнительные номера НЕ удаляются — остаются в поле снизу, чтобы их можно было проверить.
 numbersEl.addEventListener('paste', () => {
   setTimeout(() => {
-    const all = normalizeAll(numbersEl.value);
-    const unique = [...new Set(all)];
-    const dups = all.length - unique.length;
-    if (dups > 0) {
-      numbersEl.value = unique.join('\n');
-      showAlert(`🗑 Удалено дублей: ${dups}. Осталось уникальных номеров: ${unique.length}.`, 'success');
+    const { valid, invalid } = classify(numbersEl.value);
+    const unique = [...new Set(valid)];
+    const dups = valid.length - unique.length;
+    if (dups > 0 || invalid.length > 0) {
+      numbersEl.value = unique.concat(invalid).join('\n');
     }
+    const msgs = [];
+    if (dups > 0) msgs.push(`🗑 Удалено дублей: ${dups}. Уникальных номеров: ${unique.length}.`);
+    if (invalid.length > 0) msgs.push(`⚠ Проверьте номера (не будут добавлены в файл, нужен формат 7XXXXXXXXXX): ${fmtList(invalid)}`);
+    if (msgs.length) showAlert(msgs.join('\n'), invalid.length ? 'warn' : 'success');
     updateCounter();
   }, 0);
 });
@@ -465,13 +487,14 @@ numbersEl.addEventListener('paste', () => {
 const CHUNK_SIZE = 1000;
 
 function updateCounter() {
-  const all = normalizeAll(numbersEl.value);
-  const nums = [...new Set(all)];
+  const { valid, invalid } = classify(numbersEl.value);
+  const nums = [...new Set(valid)];
   const n = nums.length;
-  const dups = all.length - n;
+  const dups = valid.length - n;
   const files = Math.ceil(n / CHUNK_SIZE);
   let txt = files > 1 ? `Номеров: ${n} → файлов: ${files}` : `Номеров: ${n}`;
   if (dups > 0) txt += ` · дублей: ${dups}`;
+  if (invalid.length > 0) txt += ` · на проверку: ${invalid.length}`;
   counterEl.textContent = txt;
   counterEl.className = 'counter';
   // полоса показывает заполнение последнего (неполного) файла
@@ -485,6 +508,7 @@ function showAlert(msg, type) {
   const el = document.getElementById('alert');
   el.textContent = msg;
   el.className = 'alert ' + type;
+  el.style.whiteSpace = 'pre-line';
   el.style.display = 'block';
 }
 
@@ -530,9 +554,11 @@ function generate() {
   const raw = numbersEl.value.trim();
   if (!raw) { showAlert('⚠ Введите хотя бы один номер телефона.', 'warn'); return; }
 
-  const nums = parseNumbers(raw);
+  const { valid, invalid } = classify(raw);
+  const nums = [...new Set(valid)];
   if (nums.length === 0) {
-    showAlert('⚠ Не найдено корректных номеров. Проверьте формат ввода — ожидаются 10–11-значные цифровые номера.', 'error');
+    const base = '⚠ Не найдено корректных номеров (нужен формат 7XXXXXXXXXX — ровно 11 цифр).';
+    showAlert(invalid.length ? `${base}\nПроверьте номера: ${fmtList(invalid)}` : base, 'error');
     return;
   }
 
@@ -564,7 +590,11 @@ function generate() {
     if (rem > 0) partsDesc.push(`1 файл с ${rem}`);
     breakdown = ` (${partsDesc.join(' + ')})`;
   }
-  showAlert(`✓ Сформировано файлов: ${total}${breakdown} — всего ${nums.length} номеров для ${operator}.`, 'success');
+  let msg = `✓ Сформировано файлов: ${total}${breakdown} — всего ${nums.length} номеров для ${operator}.`;
+  if (invalid.length > 0) {
+    msg += `\n⚠ Не добавлены в файл — проверьте номера (нужен формат 7XXXXXXXXXX): ${fmtList(invalid)}`;
+  }
+  showAlert(msg, invalid.length ? 'warn' : 'success');
 
   // Предпросмотр первого файла
   const previewCsv = buildCSV(parts[0], deviceName, deviceType, address);
