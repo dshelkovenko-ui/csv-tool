@@ -498,10 +498,18 @@ function escapeCSV(val) {
   return s;
 }
 
-function buildCSV(numbers, deviceName, deviceType, address) {
+function buildCSV(numbers, deviceName, deviceType, address, operator) {
   const header = 'Наименование устройства;Идентификационный номер;Тип устройства;Номер телефона;Адрес, где находится устройство';
+  // Шаблон Мегафона: по умолчанию заполняется ТОЛЬКО номер (колонка D).
+  //   B (идентификационный номер) — всегда пустой;
+  //   C (тип устройства) — пустой, пока не выбран тип, отличный от «Прочее»;
+  //   A (наименование) и E (адрес) — только если их ввели в полях.
+  const isMegafon = operator === 'Мегафон';
   const rows = numbers.map(num => {
-    return [deviceName, num, deviceType, num, address].map(escapeCSV).join(';');
+    const cols = isMegafon
+      ? [deviceName, '', (deviceType === 'Прочее' ? '' : deviceType), num, address]
+      : [deviceName, num, deviceType, num, address];
+    return cols.map(escapeCSV).join(';');
   });
   return '\uFEFF' + [header, ...rows].join('\r\n');
 }
@@ -549,7 +557,7 @@ function generate() {
   // Скачиваем каждый файл с небольшой задержкой,
   // чтобы браузер не блокировал множественную загрузку
   parts.forEach((part, i) => {
-    const csv = buildCSV(part, deviceName, deviceType, address);
+    const csv = buildCSV(part, deviceName, deviceType, address, operator);
     const filename = total === 1
       ? `${operator}_${part.length}_номеров.csv`
       : `${operator}_часть_${i + 1}_из_${total}_${part.length}_номеров.csv`;
